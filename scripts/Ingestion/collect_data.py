@@ -1,173 +1,211 @@
-import os
+import requests
 import json
 import base64
-import requests
-import pandas as pd
 import markdown
-import logging
+import os
 from bs4 import BeautifulSoup
-from datetime import datetime
 
-# Setup logging
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+# =======================
+# CONFIGURATION
+# =======================
 
-# Configuration: GitHub Token & Headers (Replace with your own)
-TOKEN = os.getenv("GITHUB_TOKEN")  # Store securely as an environment variable
-if not TOKEN:
-    raise ValueError("GitHub Token is missing! Set it as an environment variable.")
-    
-HEADERS = {'Authorization': f'token {TOKEN}'}
-QUERY = "language:python"
-BASE_URL = "https://api.github.com/search/repositories"
-PER_PAGE = 50
+# GitHub Authentication
+# IMPORTANT: Do not hardcode your token in production.
+TOKEN = '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'  # Replace with your GitHub token
+headers = {'Authorization': f'token {TOKEN}'}
 
-# Paths (Ensure these folders exist)
-RAW_DATA_PATH = "data/raw/github_repos_raw.json"
-PROCESSED_DATA_PATH = "data/processed/github_repos_processed.csv"
+# GitHub API configuration
+query = 'language:python'
+base_url = 'https://api.github.com/search/repositories'
+per_page = 50
 
-# Function to convert Markdown to plain text
-def markdown_to_text(md_content):
-    html_content = markdown.markdown(md_content)
-    soup = BeautifulSoup(html_content, "html.parser")
+# File paths (placed under data/raw/ as suggested by your project tree)
+output_file = os.path.join('data', 'raw', 'github_repos_with_issues.json')
+repo_ids_file = os.path.join('data', 'raw', 'github_repos_ids.json')
+
+
+# =======================
+# HELPER FUNCTIONS
+# =======================
+
+def ensure_dir(file_path):
+    """
+    Ensure that the directory for file_path exists.
+    """
+    directory = os.path.dirname(file_path)
+    if directory and not os.path.exists(directory):
+        os.makedirs(directory, exist_ok=True)
+
+
+def markdown_to_text(markdown_content):
+    """
+    Convert Markdown content to plain text.
+    """
+    html_content = markdown.markdown(markdown_content)
+    soup = BeautifulSoup(html_content, 'html.parser')
     return soup.get_text()
 
-# Function to fetch repository data from GitHub API
-def fetch_repositories():
-    logging.info("Fetching repositories from GitHub...")
+
+def load_existing_data():
+    """
+    Load existing repository data from the JSON file.
+    """
+    if os.path.exists(output_file):
+        with open(output_file, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    return []
+
+
+def load_existing_repo_ids():
+    """
+    Load existing repository IDs from the JSON file.
+    """
+    if os.path.exists(repo_ids_file):
+        with open(repo_ids_file, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    return {}
+
+
+def save_data(data):
+    """
+    Save the repository data to a JSON file.
+    """
+    ensure_dir(output_file)
+    with open(output_file, 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=4)
+
+
+def save_repo_ids(repo_ids):
+    """
+    Save the repository IDs mapping to a JSON file.
+    """
+    ensure_dir(repo_ids_file)
+    with open(repo_ids_file, 'w', encoding='utf-8') as f:
+        json.dump(repo_ids, f, indent=4)
+
+
+# =======================
+# MAIN FUNCTION
+# =======================
+
+def main():
+    # Load previously saved data (if any)
+    existing_data = load_existing_data()
+    # Create a set of repository full names that have already been processed
+    existing_repos = {repo['full_name'] for repo in existing_data}
+    # Load previously saved repository IDs (as keys)
+    repo_ids = load_existing_repo_ids()
+
     all_repos = []
     page = 1
 
+    # Retrieve repositories using the GitHub Search API
     while True:
-        url = f"{BASE_URL}?q={QUERY}&per_page={PER_PAGE}&page={page}"
-        response = requests.get(url, headers=HEADERS)
-
+        url = f'{base_url}?q={query}&per_page={per_page}&page={page}'
+        response = requests.get(url, headers=headers)
         if response.status_code != 200:
-            logging.error(f"Error {response.status_code}: {response.text}")
+            print(f"Erreur {response.status_code} lors de la récupération des repositories.")
             break
 
         data = response.json()
-        if "items" in data:
-            all_repos.extend(data["items"])
+        if 'items' in data:
+            all_repos.extend(data['items'])
         else:
             break
 
-        if len(data["items"]) < PER_PAGE:
-            break  # Stop when there are no more results
+        if len(data['items']) < per_page:
+            # No more pages to fetch
+            break
 
         page += 1
 
-    logging.info(f"Total repositories fetched: {len(all_repos)}")
-    return all_repos
+    print(f"Nombre total de repositories récupérés : {len(all_repos)}")
 
-# Function to fetch repository details
-def fetch_repository_details(repo):
-    repo_name = repo["full_name"]
-    repo_id = repo["id"]
+    # Start with the already-existing data
+    detailed_data = existing_data
 
-    logging.info(f"Processing repository: {repo_name} (ID: {repo_id})")
+    for repo in all_repos:
+        repo_name = repo.get('full_name')
+        repo_id = repo.get('id')
+        
+        # Check if the repository has already been processed
+        if repo_name in existing_repos or str(repo_id) in repo_ids:
+            print(f"Le repository {repo_name} (ID: {repo_id}) est déjà récupéré. Ignoré.")
+            continue
 
-    # Fetch README
-    readme_url = f"https://api.github.com/repos/{repo_name}/readme"
-    readme_response = requests.get(readme_url, headers=HEADERS)
-    readme_content = None
+        print(f"Traitement du repository : {repo_name} (ID: {repo_id})")
 
-    if readme_response.status_code == 200:
+        # Retrieve the repository's README file
+        readme_url = f'https://api.github.com/repos/{repo_name}/readme'
+        readme_response = requests.get(readme_url, headers=headers)
         readme_data = readme_response.json()
-        if "content" in readme_data:
-            readme_decoded = base64.b64decode(readme_data["content"]).decode("utf-8")
-            readme_content = markdown_to_text(readme_decoded)
+        readme_content = None
 
-    # Fetch collaborators
-    collaborators_url = f"https://api.github.com/repos/{repo_name}/collaborators"
-    collaborators_response = requests.get(collaborators_url, headers=HEADERS)
-    num_collaborators = len(collaborators_response.json()) if collaborators_response.status_code == 200 else 0
+        if 'content' in readme_data:
+            try:
+                # Decode from Base64 and convert Markdown to plain text
+                readme_base64 = readme_data['content']
+                readme_decoded = base64.b64decode(readme_base64).decode('utf-8')
+                readme_content = markdown_to_text(readme_decoded)
+            except Exception as e:
+                print(f"Erreur lors du décodage du README pour {repo_name}: {e}")
 
-    # Fetch closed issues
-    issues_url = f"https://api.github.com/repos/{repo_name}/issues?state=closed&per_page={PER_PAGE}"
-    issues_response = requests.get(issues_url, headers=HEADERS)
-    
-    closed_issues = []
-    if issues_response.status_code == 200:
-        for issue in issues_response.json():
-            if "pull_request" not in issue:  # Ignore pull requests
-                closed_issues.append({
-                    "id": issue["id"],
-                    "title": issue["title"],
-                    "state": issue["state"],
-                    "created_at": issue["created_at"],
-                    "closed_at": issue["closed_at"],
-                    "body": issue.get("body", ""),
-                    "labels": [label["name"] for label in issue.get("labels", [])],
-                    "assignees": [assignee["login"] for assignee in issue.get("assignees", [])],
-                })
+        # Retrieve collaborators information
+        collaborators_url = f'https://api.github.com/repos/{repo_name}/collaborators'
+        collaborators_response = requests.get(collaborators_url, headers=headers)
+        collaborators = collaborators_response.json()
+        num_collaborators = len(collaborators) if isinstance(collaborators, list) else 0
 
-    # Return repository details
-    return {
-        "repo_id": repo_id,
-        "name": repo["name"],
-        "full_name": repo["full_name"],
-        "stars": repo["stargazers_count"],
-        "forks": repo["forks_count"],
-        "readme": readme_content,
-        "collaborators": num_collaborators,
-        "closed_issues": closed_issues,
-    }
+        # Retrieve closed issues (exclude pull requests)
+        issues_url = f'https://api.github.com/repos/{repo_name}/issues?state=closed&per_page={per_page}'
+        issues_response = requests.get(issues_url, headers=headers)
+        issues = []
+        if issues_response.status_code == 200:
+            try:
+                issues = issues_response.json()
+            except json.JSONDecodeError:
+                print(f"Erreur de décodage JSON pour les issues du repository {repo_name}")
+        else:
+            print(f"Erreur {issues_response.status_code} lors de la récupération des issues du repository {repo_name}")
 
-# Function to save raw data
-def save_raw_data(data):
-    logging.info(f"Saving raw data to {RAW_DATA_PATH}...")
-    os.makedirs(os.path.dirname(RAW_DATA_PATH), exist_ok=True)
-    with open(RAW_DATA_PATH, "w") as f:
-        json.dump(data, f, indent=4)
+        # Build the repository data dictionary
+        repo_data = {
+            'name': repo.get('name'),
+            'full_name': repo_name,
+            'stars': repo.get('stargazers_count'),
+            'forks': repo.get('forks_count'),
+            'readme': readme_content,
+            'collaborators': num_collaborators,
+            'closed_issues': []
+        }
 
-# Function to process and save structured data
-def process_and_save_data(raw_data):
-    logging.info("Processing data and saving structured output...")
+        # Process each closed issue (excluding pull requests)
+        for issue in issues:
+            if 'pull_request' not in issue:
+                issue_details = {
+                    'id': issue.get('id'),
+                    'title': issue.get('title'),
+                    'state': issue.get('state'),
+                    'created_at': issue.get('created_at'),
+                    'closed_at': issue.get('closed_at'),
+                    'body': issue.get('body', ''),
+                    'labels': [label.get('name') for label in issue.get('labels', [])],
+                    'assignees': [assignee.get('login') for assignee in issue.get('assignees', [])],
+                }
+                repo_data['closed_issues'].append(issue_details)
 
-    # Transform raw data into a DataFrame
-    processed_data = []
-    for repo in raw_data:
-        for issue in repo["closed_issues"]:
-            processed_data.append({
-                "repo_id": repo["repo_id"],
-                "repo_name": repo["full_name"],
-                "stars": repo["stars"],
-                "forks": repo["forks"],
-                "collaborators": repo["collaborators"],
-                "issue_id": issue["id"],
-                "issue_title": issue["title"],
-                "issue_created_at": issue["created_at"],
-                "issue_closed_at": issue["closed_at"],
-                "issue_body": issue["body"],
-                "issue_labels": ", ".join(issue["labels"]),
-                "issue_assignees": ", ".join(issue["assignees"]),
-            })
+        # Append the processed repository data and record its ID
+        detailed_data.append(repo_data)
+        existing_repos.add(repo_name)
+        repo_ids[str(repo_id)] = repo_name  # Using string for key consistency
 
-    # Convert to DataFrame
-    df = pd.DataFrame(processed_data)
+    # Save the updated data to disk
+    save_data(detailed_data)
+    save_repo_ids(repo_ids)
 
-    # Save processed data
-    os.makedirs(os.path.dirname(PROCESSED_DATA_PATH), exist_ok=True)
-    df.to_csv(PROCESSED_DATA_PATH, index=False)
-    logging.info(f"Structured data saved to {PROCESSED_DATA_PATH}")
+    print(f"Données enregistrées dans {output_file}")
+    print(f"IDs des repositories enregistrés dans {repo_ids_file}")
 
-# Main function to run ingestion pipeline
-def main():
-    logging.info("Starting data ingestion pipeline...")
-
-    # Fetch repositories
-    raw_repos = fetch_repositories()
-
-    # Fetch details for each repository
-    detailed_repos = [fetch_repository_details(repo) for repo in raw_repos]
-
-    # Save raw data
-    save_raw_data(detailed_repos)
-
-    # Process and save structured data
-    process_and_save_data(detailed_repos)
-
-    logging.info("Data ingestion pipeline completed successfully.")
 
 if __name__ == "__main__":
     main()
