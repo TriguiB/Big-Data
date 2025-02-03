@@ -1,0 +1,6 @@
+# Big Data & Traitement des Données
+pyspark
+pandas
+numpy
+scipy
+pyarrow
