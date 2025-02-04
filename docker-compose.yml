@@ -1,0 +1,41 @@
+version: '3.8'
+
+services:
+  # Service MongoDB
+  mongodb:
+    image: mongo:latest
+    container_name: mongodb
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb-data:/data/db  # Volume dédié pour MongoDB (pas dans ./data/raw)
+
+  # Service Spark (préconfiguré via image Bitnami)
+  spark:
+    image: bitnami/spark:latest  # Utilisation de l'image préconfigurée Spark
+    container_name: spark
+    ports:
+      - "8080:8080"  # Interface Web de Spark
+    environment:
+      - SPARK_MODE=master  # Mode "master" pour Spark
+    depends_on:
+      - mongodb
+    command: "/bin/bash -c '/opt/spark/bin/spark-class org.apache.spark.deploy.master.Master'"
+
+  # Service Ingestion (avec le Dockerfile personnalisé)
+  ingestion:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ingestion-container
+    volumes:
+      - ./scripts/Ingestion:/app/scripts/Ingestion  # Mount les scripts d'ingestion
+    environment:
+      - MONGO_URI=mongodb://mongodb:27017  # URI de MongoDB
+    depends_on:
+      - mongodb
+      - spark
+
+# Définir le volume pour MongoDB
+volumes:
+  mongodb-data:  # Volume pour MongoDB

@@ -7,3 +7,4 @@ pyarrow
 requests
 markdown
 beautifulsoup4
+pymongo
