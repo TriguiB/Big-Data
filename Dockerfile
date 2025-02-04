@@ -1,20 +1,15 @@
-# Utilisation de l'image officielle de Python
-FROM python:3.9-slim
-
-# Copier le fichier requirements.txt dans le conteneur
-COPY requirements.txt /app/requirements.txt
-
-# Installer les dépendances Python à partir de requirements.txt
-RUN pip install -r /app/requirements.txt
+# Utilise l'image Bitnami Spark
+FROM bitnami/spark:latest
 
 # Définir le répertoire de travail
 WORKDIR /app
 
-# Copier les scripts d'ingestion
-COPY ./scripts/Ingestion /app/scripts/Ingestion
+# Copier les dépendances et les installer avec pip
+COPY requirements.txt /app/
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Exposer les ports nécessaires pour MongoDB et Spark (si nécessaire)
-EXPOSE 27017 8080
+# Copier le code source dans le conteneur
+COPY . /app/
 
-# Commande pour lancer l'ingestion des données
-CMD ["python", "scripts/Ingestion/collect_data.py"]
+# Lancer un terminal pour coder dans le conteneur
+CMD ["bash"]
