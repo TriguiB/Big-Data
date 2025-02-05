@@ -1,8 +1,5 @@
 # Utilise l'image Bitnami Spark
 FROM bitnami/spark:latest
-# Download MongoDB Spark Connector JAR
-RUN curl -o /opt/bitnami/spark/jars/mongo-spark-connector_2.12-10.4.1.jar \
-    https://repo1.maven.org/maven2/org/mongodb/spark/mongo-spark-connector_2.12/10.4.1/mongo-spark-connector_2.12-10.4.1.jar
 # Définir le répertoire de travail
 WORKDIR /app
 

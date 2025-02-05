@@ -1,8 +1,9 @@
 from pyspark.sql import SparkSession
 
-# Création de la session Spark avec MongoDB
+# Création de la session Spark avec connexion au Master du cluster
 spark = SparkSession.builder \
     .appName("MongoDB_Spark") \
+    .master("spark://spark-master:7077") \
     .config("spark.jars.packages", "org.mongodb.spark:mongo-spark-connector_2.12:10.4.1") \
     .config("spark.mongodb.read.connection.uri", "mongodb://mongodb:27017/github_issues") \
     .config("spark.mongodb.write.connection.uri", "mongodb://mongodb:27017/github_issues") \
@@ -12,6 +13,10 @@ spark = SparkSession.builder \
     .config("spark.driver.memory", "2G") \
     .config("spark.sql.shuffle.partitions", "4") \
     .getOrCreate()
+
+# Vérifier si la connexion au cluster est bien établie
+print("🚀 Spark connecté au master:", spark.sparkContext.master)
+print("🖥️ Nombre de workers disponibles:", spark.sparkContext.defaultParallelism)
 
 try:
     # Lire les données depuis MongoDB
@@ -26,4 +31,4 @@ try:
 finally:
     # Arrêter la session Spark
     spark.stop()
-    print("Spark session stopped.")
+    print("✅ Spark session stopped.")
