@@ -2,6 +2,7 @@ from azure.storage.blob import BlobServiceClient
 import json
 from pyspark.sql import SparkSession
 from pyspark.sql import Row
+from pyspark.sql.functions import col, expr, datediff, to_date, when
 
 # Azure Blob Storage configurations
 AZURE_CONNECTION_STRING = "DefaultEndpointsProtocol=https;AccountName=issuesstorage;AccountKey=Q7It5++J5VE7284S/QP+ZqHE1cT6Mad16bvyC+Eqx1j1xpRh5QlWMFJAzdmUC/DguMF3CmEsK87R+AStyWxtjg==;EndpointSuffix=core.windows.net"
@@ -16,7 +17,7 @@ def get_blob_data():
     return json.loads(blob_data.decode('utf-8'))
 
 # Récupérer le message
-message = get_blob_data()
+messages = get_blob_data()
 
 # Initialiser Spark en mode local et avec MongoDB
 spark = SparkSession.builder \
@@ -33,20 +34,44 @@ print("🚀 Spark connecté au master:", spark.sparkContext.master)
 print("🖥️ Nombre de workers disponibles:", spark.sparkContext.defaultParallelism)
 
 try:
-    # Si le message est une liste de dictionnaires, passe-le directement au DataFrame
-    if isinstance(message, list):
-        df = spark.createDataFrame(message)
-    else:
-        # Sinon, transforme-le en une liste contenant ce dictionnaire
-        df = spark.createDataFrame([message])
+    # Vérification si messages est une liste ou un seul objet
+    if not isinstance(messages, list):
+        messages = [messages]
 
-    # Afficher le message transformé
-    df.show()
+    # Transformation des messages en une liste de Row pour créer un DataFrame
+    rows = []
+    for message in messages:
+        if 'closed_issues' in message:  # Vérifier si la clé 'closed_issues' existe
+            closed_issues = message['closed_issues']
+            for issue in closed_issues:
+                # Prétraiter les closed_issues
+                rows.append(Row(
+                    issue_id=issue.get('id', None),
+                    title=issue.get('title', ''),
+                    body=issue.get('body', ''),
+                    state=issue.get('state', ''),
+                    created_at=issue.get('created_at', None),
+                    closed_at=issue.get('closed_at', None),
+                    language=message.get('language', ''),
+                    stars=message.get('stars', 0)
+                ))
 
-    # Insérer le message dans la collection MongoDB
-    df.write.format("mongodb") \
+    # Créer un DataFrame à partir des lignes
+    df_issues = spark.createDataFrame(rows)
+
+    # Effectuer des transformations supplémentaires si nécessaire (ex : calcul de durée)
+    df_issues = df_issues.withColumn("created_at", to_date(col("created_at"))) \
+        .withColumn("closed_at", to_date(col("closed_at"))) \
+        .withColumn("duration", datediff(col("closed_at"), col("created_at"))) \
+        .fillna("")
+
+    # Afficher les données à insérer
+    df_issues.show()
+
+    # Écrire les données dans la collection MongoDB
+    df_issues.write.format("mongodb") \
         .option("database", "github_issues") \
-        .option("collection", "issues") \
+        .option("collection", "closed_issues") \
         .mode("append") \
         .save()
 
@@ -55,9 +80,9 @@ try:
     # Lire les données depuis MongoDB pour vérifier l'insertion
     df_read = spark.read.format("mongodb") \
         .option("database", "github_issues") \
-        .option("collection", "issues") \
+        .option("collection", "closed_issues") \
         .load()
-    
+
     # Afficher les données lues
     df_read.show()
 
