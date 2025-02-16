@@ -8,3 +8,4 @@ requests
 markdown
 beautifulsoup4
 pymongo
+azure-storage-blob

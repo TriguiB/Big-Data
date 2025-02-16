@@ -1,211 +1,129 @@
 import requests
 import json
-import base64
-import markdown
 import os
-from bs4 import BeautifulSoup
+import sys
+from confluent_kafka import Producer
 
-# =======================
-# CONFIGURATION
-# =======================
+# Configuration GitHub API
+GITHUB_TOKEN = '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'  # Remplace par ton token GitHub
+HEADERS = {'Authorization': f'token {GITHUB_TOKEN}'}
+BASE_URL = 'https://api.github.com/search/repositories'
+PER_PAGE = 100  # Max autorisé par GitHub
 
-# GitHub Authentication
-# IMPORTANT: Do not hardcode your token in production.
-TOKEN = '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'  # Replace with your GitHub token
-headers = {'Authorization': f'token {TOKEN}'}
+KAFKA_CONFIG = {
+    'bootstrap.servers': 'pkc-lgwgm.eastus2.azure.confluent.cloud:9092',
+    'security.protocol': 'SASL_SSL',
+    'sasl.mechanism': 'PLAIN',
+    'sasl.username': 'VOLOCHIQOXYMW6SC',
+    'sasl.password': 'mfcvWe2Ol/SFvgWA18/CPoNpoLeTvrho2hdWlAoHhTIjW4Dam0Y7y5ZnC8mXG8xp'
+}
+KAFKA_TOPIC = 'git_data'  # Nom du topic Kafka
 
-# GitHub API configuration
-query = 'language:python'
-base_url = 'https://api.github.com/search/repositories'
-per_page = 50
+# Initialisation du producteur Kafka
+producer = Producer(KAFKA_CONFIG)
 
-# File paths (placed under data/raw/ as suggested by your project tree)
-output_file = os.path.join('data', 'raw', 'github_repos_with_issues.json')
-repo_ids_file = os.path.join('data', 'raw', 'github_repos_ids.json')
+# Récupérer les repositories GitHub
+def fetch_github_data(min_date, max_date, page):
+    """Récupère une page de repositories en fonction des dates de création"""
+    query = f'language:angular created:{min_date}..{max_date}'
+    
+    params = {
+        'q': query,
+        'sort': 'stars',
+        'order': 'desc',
+        'per_page': PER_PAGE,
+        'page': page
+    }
+    
+    try:
+        response = requests.get(BASE_URL, headers=HEADERS, params=params)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        print(f"❌ Erreur API: {str(e)}")
+        return None
 
+# Récupérer les "closed issues" d'un repo
+def fetch_closed_issues(repo_full_name):
+    """Récupère toutes les issues fermées d'un repository"""
+    issues_url = f'https://api.github.com/repos/{repo_full_name}/issues'
+    params = {'state': 'closed', 'per_page': 100}
 
-# =======================
-# HELPER FUNCTIONS
-# =======================
-
-def ensure_dir(file_path):
-    """
-    Ensure that the directory for file_path exists.
-    """
-    directory = os.path.dirname(file_path)
-    if directory and not os.path.exists(directory):
-        os.makedirs(directory, exist_ok=True)
-
-
-def markdown_to_text(markdown_content):
-    """
-    Convert Markdown content to plain text.
-    """
-    html_content = markdown.markdown(markdown_content)
-    soup = BeautifulSoup(html_content, 'html.parser')
-    return soup.get_text()
-
-
-def load_existing_data():
-    """
-    Load existing repository data from the JSON file.
-    """
-    if os.path.exists(output_file):
-        with open(output_file, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    return []
-
-
-def load_existing_repo_ids():
-    """
-    Load existing repository IDs from the JSON file.
-    """
-    if os.path.exists(repo_ids_file):
-        with open(repo_ids_file, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    return {}
-
-
-def save_data(data):
-    """
-    Save the repository data to a JSON file.
-    """
-    ensure_dir(output_file)
-    with open(output_file, 'w', encoding='utf-8') as f:
-        json.dump(data, f, indent=4)
-
-
-def save_repo_ids(repo_ids):
-    """
-    Save the repository IDs mapping to a JSON file.
-    """
-    ensure_dir(repo_ids_file)
-    with open(repo_ids_file, 'w', encoding='utf-8') as f:
-        json.dump(repo_ids, f, indent=4)
-
-
-# =======================
-# MAIN FUNCTION
-# =======================
-
-def main():
-    # Load previously saved data (if any)
-    existing_data = load_existing_data()
-    # Create a set of repository full names that have already been processed
-    existing_repos = {repo['full_name'] for repo in existing_data}
-    # Load previously saved repository IDs (as keys)
-    repo_ids = load_existing_repo_ids()
-
-    all_repos = []
+    closed_issues = []
     page = 1
 
-    # Retrieve repositories using the GitHub Search API
     while True:
-        url = f'{base_url}?q={query}&per_page={per_page}&page={page}'
-        response = requests.get(url, headers=headers)
-        if response.status_code != 200:
-            print(f"Erreur {response.status_code} lors de la récupération des repositories.")
+        try:
+            response = requests.get(issues_url, headers=HEADERS, params={**params, 'page': page})
+            response.raise_for_status()
+            issues = response.json()
+
+            if not issues:
+                break
+
+            for issue in issues:
+                if 'pull_request' not in issue:
+                    closed_issues.append({
+                        'id': issue['id'],
+                        'title': issue['title'],
+                        'body': issue.get('body', ''),
+                        'state': issue['state'],
+                        'created_at': issue['created_at'],
+                        'closed_at': issue.get('closed_at', None),
+                    })
+
+            page += 1
+
+        except requests.exceptions.RequestException as e:
+            print(f"⚠️ Erreur lors de la récupération des issues pour {repo_full_name}: {str(e)}")
             break
 
-        data = response.json()
-        if 'items' in data:
-            all_repos.extend(data['items'])
-        else:
+    return closed_issues
+
+# Envoyer des données à Kafka
+def send_to_kafka(data):
+    try:
+        producer.produce(KAFKA_TOPIC, json.dumps(data))
+        producer.flush()
+        print(f"✅ Données envoyées à Kafka pour {data['full_name']}")
+    except Exception as e:
+        print(f"❌ Erreur lors de l'envoi à Kafka: {str(e)}")
+
+# Fonction principale
+def main():
+    # Lire les arguments
+    if len(sys.argv) != 3:
+        print("❌ Utilisation : python collect_data_auto.py <min_date> <max_date>")
+        print("   Exemple : python collect_data_auto.py 2020-01-01 2022-12-31")
+        sys.exit(1)
+
+    min_date, max_date = sys.argv[1], sys.argv[2]
+
+    for page in range(1, 11):  # Limite de 1 000 résultats sur GitHub API
+        print(f"🔍 Traitement de la page {page} ({min_date} → {max_date})...")
+        data = fetch_github_data(min_date, max_date, page)
+
+        if not data or 'items' not in data:
+            print("⚠️ Aucune donnée reçue ou fin des résultats.")
             break
 
-        if len(data['items']) < per_page:
-            # No more pages to fetch
-            break
+        for repo in data['items']:
+            print(f"📦 Récupération des issues fermées pour {repo['full_name']}...")
+            closed_issues = fetch_closed_issues(repo['full_name'])
 
-        page += 1
+            repo_data = {
+                'id': repo['id'],
+                'name': repo['name'],
+                'full_name': repo['full_name'],
+                'language': repo.get('language', 'Unknown'),
+                'stars': repo['stargazers_count'],
+                'created_at': repo['created_at'],
+                'closed_issues': closed_issues
+            }
 
-    print(f"Nombre total de repositories récupérés : {len(all_repos)}")
+            send_to_kafka(repo_data)
 
-    # Start with the already-existing data
-    detailed_data = existing_data
-
-    for repo in all_repos:
-        repo_name = repo.get('full_name')
-        repo_id = repo.get('id')
-        
-        # Check if the repository has already been processed
-        if repo_name in existing_repos or str(repo_id) in repo_ids:
-            print(f"Le repository {repo_name} (ID: {repo_id}) est déjà récupéré. Ignoré.")
-            continue
-
-        print(f"Traitement du repository : {repo_name} (ID: {repo_id})")
-
-        # Retrieve the repository's README file
-        readme_url = f'https://api.github.com/repos/{repo_name}/readme'
-        readme_response = requests.get(readme_url, headers=headers)
-        readme_data = readme_response.json()
-        readme_content = None
-
-        if 'content' in readme_data:
-            try:
-                # Decode from Base64 and convert Markdown to plain text
-                readme_base64 = readme_data['content']
-                readme_decoded = base64.b64decode(readme_base64).decode('utf-8')
-                readme_content = markdown_to_text(readme_decoded)
-            except Exception as e:
-                print(f"Erreur lors du décodage du README pour {repo_name}: {e}")
-
-        # Retrieve collaborators information
-        collaborators_url = f'https://api.github.com/repos/{repo_name}/collaborators'
-        collaborators_response = requests.get(collaborators_url, headers=headers)
-        collaborators = collaborators_response.json()
-        num_collaborators = len(collaborators) if isinstance(collaborators, list) else 0
-
-        # Retrieve closed issues (exclude pull requests)
-        issues_url = f'https://api.github.com/repos/{repo_name}/issues?state=closed&per_page={per_page}'
-        issues_response = requests.get(issues_url, headers=headers)
-        issues = []
-        if issues_response.status_code == 200:
-            try:
-                issues = issues_response.json()
-            except json.JSONDecodeError:
-                print(f"Erreur de décodage JSON pour les issues du repository {repo_name}")
-        else:
-            print(f"Erreur {issues_response.status_code} lors de la récupération des issues du repository {repo_name}")
-
-        # Build the repository data dictionary
-        repo_data = {
-            'name': repo.get('name'),
-            'full_name': repo_name,
-            'stars': repo.get('stargazers_count'),
-            'forks': repo.get('forks_count'),
-            'readme': readme_content,
-            'collaborators': num_collaborators,
-            'closed_issues': []
-        }
-
-        # Process each closed issue (excluding pull requests)
-        for issue in issues:
-            if 'pull_request' not in issue:
-                issue_details = {
-                    'id': issue.get('id'),
-                    'title': issue.get('title'),
-                    'state': issue.get('state'),
-                    'created_at': issue.get('created_at'),
-                    'closed_at': issue.get('closed_at'),
-                    'body': issue.get('body', ''),
-                    'labels': [label.get('name') for label in issue.get('labels', [])],
-                    'assignees': [assignee.get('login') for assignee in issue.get('assignees', [])],
-                }
-                repo_data['closed_issues'].append(issue_details)
-
-        # Append the processed repository data and record its ID
-        detailed_data.append(repo_data)
-        existing_repos.add(repo_name)
-        repo_ids[str(repo_id)] = repo_name  # Using string for key consistency
-
-    # Save the updated data to disk
-    save_data(detailed_data)
-    save_repo_ids(repo_ids)
-
-    print(f"Données enregistrées dans {output_file}")
-    print(f"IDs des repositories enregistrés dans {repo_ids_file}")
-
+    print("✅ Collecte terminée")
 
 if __name__ == "__main__":
     main()

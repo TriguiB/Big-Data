@@ -1,16 +1,30 @@
+from azure.storage.blob import BlobServiceClient
+import json
 from pyspark.sql import SparkSession
 from pyspark.sql import Row
 
-# Création de la session Spark avec connexion au Master du cluster
+# Azure Blob Storage configurations
+AZURE_CONNECTION_STRING = "DefaultEndpointsProtocol=https;AccountName=issuesstorage;AccountKey=Q7It5++J5VE7284S/QP+ZqHE1cT6Mad16bvyC+Eqx1j1xpRh5QlWMFJAzdmUC/DguMF3CmEsK87R+AStyWxtjg==;EndpointSuffix=core.windows.net"
+CONTAINER_NAME = "kafka-data"
+BLOB_NAME = "messages_test.json"
+
+# Fonction pour extraire les données depuis Azure Blob Storage
+def get_blob_data():
+    blob_service_client = BlobServiceClient.from_connection_string(AZURE_CONNECTION_STRING)
+    blob_client = blob_service_client.get_blob_client(container=CONTAINER_NAME, blob=BLOB_NAME)
+    blob_data = blob_client.download_blob().readall()
+    return json.loads(blob_data.decode('utf-8'))
+
+# Récupérer le message
+message = get_blob_data()
+
+# Initialiser Spark en mode local et avec MongoDB
 spark = SparkSession.builder \
     .appName("MongoDB_Spark") \
     .config("spark.jars.packages", "org.mongodb.spark:mongo-spark-connector_2.12:10.4.1") \
     .config("spark.mongodb.read.connection.uri", "mongodb://mongodb:27017/github_issues") \
     .config("spark.mongodb.write.connection.uri", "mongodb://mongodb:27017/github_issues") \
     .config("spark.executor.memory", "1G") \
-    .config("spark.executor.cores", "1") \
-    .config("spark.cores.max", "4") \
-    .config("spark.driver.memory", "2G") \
     .config("spark.sql.shuffle.partitions", "4") \
     .getOrCreate()
 
@@ -19,18 +33,17 @@ print("🚀 Spark connecté au master:", spark.sparkContext.master)
 print("🖥️ Nombre de workers disponibles:", spark.sparkContext.defaultParallelism)
 
 try:
-    # Créer un DataFrame avec des données de test
-    data = [
-        Row(issue_id=1, title="Test issue 1", status="open", user="user1"),
-        Row(issue_id=2, title="Test issue 2", status="closed", user="user2"),
-        Row(issue_id=3, title="Test issue 3", status="open", user="user3")
-    ]
-    df = spark.createDataFrame(data)
+    # Si le message est une liste de dictionnaires, passe-le directement au DataFrame
+    if isinstance(message, list):
+        df = spark.createDataFrame(message)
+    else:
+        # Sinon, transforme-le en une liste contenant ce dictionnaire
+        df = spark.createDataFrame([message])
 
-    # Afficher les données à insérer
+    # Afficher le message transformé
     df.show()
 
-    # Écrire les données dans la collection MongoDB
+    # Insérer le message dans la collection MongoDB
     df.write.format("mongodb") \
         .option("database", "github_issues") \
         .option("collection", "issues") \
