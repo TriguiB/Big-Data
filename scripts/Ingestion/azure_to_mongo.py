@@ -1,6 +1,7 @@
 import os
 import json
 import re
+import urllib.parse
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import to_date, datediff, col
 from azure.storage.blob import BlobServiceClient
@@ -13,7 +14,7 @@ COLLECTION_NAME = 'closed_issues'
 
 # Configuration Azure Blob Storage
 AZURE_CONNECTION_STRING = "DefaultEndpointsProtocol=https;AccountName=issuesstorage;AccountKey=Q7It5++J5VE7284S/QP+ZqHE1cT6Mad16bvyC+Eqx1j1xpRh5QlWMFJAzdmUC/DguMF3CmEsK87R+AStyWxtjg==;EndpointSuffix=core.windows.net"
-CONTAINER_NAME = 'kafka_data'
+CONTAINER_NAME = 'kafka-data'
 
 # Connexion MongoDB
 client = MongoClient(MONGO_URI)
@@ -30,8 +31,11 @@ spark = SparkSession.builder \
     .config("spark.jars.packages", "org.mongodb.spark:mongo-spark-connector_2.12:10.4.1") \
     .config("spark.mongodb.read.connection.uri", "mongodb://mongodb:27017/github_issues") \
     .config("spark.mongodb.write.connection.uri", "mongodb://mongodb:27017/github_issues") \
-    .config("spark.executor.memory", "1G") \
+    .config("spark.executor.memory", "4G") \
     .config("spark.sql.shuffle.partitions", "4") \
+    .config("spark.rpc.message.maxSize", "2000") \
+    .config("spark.mongodb.connection.timeoutMS", "60000") \
+    .config("spark.mongodb.socket.timeoutMS", "60000") \
     .getOrCreate()
 
 # Lire le fichier extracted_data.txt
@@ -50,37 +54,52 @@ def append_to_extracted_data_file(file_path, paths):
         for path in paths:
             file.write(path + '\n')
 
-def is_valid_blob_name(blob_name):
-    """Check if the blob name contains invalid characters."""
-    invalid_chars = r'[\\/:*?"<>|]'
-    return not re.search(invalid_chars, blob_name)
-
 def list_blob_hierarchy():
-    """Lister les fichiers JSON dans le conteneur Azure Blob à partir de topics/git_data/year=2025/."""
+    """Lister tous les blobs JSON dans le conteneur Azure Blob avec encodage des caractères spéciaux."""
     blobs = container_client.list_blobs(name_starts_with="topics/git_data/year=2025/")
     files = set()
 
     for blob in blobs:
-        if not is_valid_blob_name(blob.name):
-            print(f"⚠️ Skipping blob with invalid name: {blob.name}")
-            continue
-
         try:
-            # Exemple de chemin : topics/git_data/year=2025/month=02/day=14/hour=00/git_data+0+0000000000.json
-            if blob.name.endswith('.json'):  # Ne traiter que les fichiers JSON
-                files.add(blob.name)
+            # Encoder le nom du blob pour gérer les caractères spéciaux
+            encoded_blob_name = urllib.parse.quote(blob.name, safe=":/")  # Encodage tout en préservant "/"
+
+            # Ajouter uniquement les blobs qui se terminent par .json
+            if blob.name.endswith('.json'):
+                print(f"🔍 Blob trouvé : {blob.name} | Encodé : {encoded_blob_name}")  # Afficher le nom original et encodé
+                files.add(blob.name)  # Ajouter la version originale
         except Exception as e:
-            print(f"⚠️ Skipping blob due to error: {blob.name}. Error: {e}")
+            print(f"⚠️ Erreur lors du traitement du blob : {blob.name}. Erreur : {e}")
             continue
 
+    print(f"📋 Total des blobs trouvés : {len(files)}")  # Afficher le total des blobs trouvés
     return files
 
 # Lire le contenu d'un fichier JSON depuis Azure Blob Storage
-def read_json_from_blob(path):
-    """Lire le fichier JSON depuis Azure Blob Storage."""
-    blob_client = container_client.get_blob_client(path)
-    blob_data = blob_client.download_blob()
-    return json.loads(blob_data.readall())
+def read_json_from_blob(blob_name):
+    """Lire le fichier JSON depuis Azure Blob Storage, même en cas de JSON concaténés."""
+    try:
+        blob_client = container_client.get_blob_client(blob_name)
+        blob_data = blob_client.download_blob().readall().decode("utf-8")
+
+        # Vérifier si le fichier contient plusieurs objets JSON concaténés
+        if blob_data.strip().startswith("[") and blob_data.strip().endswith("]"):
+            # Si c'est une liste JSON valide
+            return json.loads(blob_data)
+        else:
+            # Traiter les cas où les objets JSON sont concaténés (par exemple, un JSON par ligne)
+            data = []
+            for line in blob_data.strip().splitlines():
+                if line.strip():  # Ignorer les lignes vides
+                    data.append(json.loads(line))
+            return data
+    except json.JSONDecodeError as e:
+        print(f"❌ Erreur de parsing JSON dans le blob {blob_name}: {e}")
+        raise
+    except Exception as e:
+        print(f"❌ Erreur lors de la lecture du blob {blob_name}: {e}")
+        raise
+
 
 # Traiter et enregistrer les issues fermées dans MongoDB
 def process_and_store_issues(data):
@@ -143,12 +162,14 @@ def process_json_files(extracted_data_path):
         for file_path in new_files:
             print(f"📄 Traitement du fichier JSON : {file_path}")
             try:
+                print("++++++++++++++++++++++++++++++++++++++++++++")
                 # Lire les données JSON depuis Azure Blob
                 data = read_json_from_blob(file_path)
+                print("++++++++++++++++++++++++++++++++++++++++++++")
 
                 # Traiter et enregistrer les issues fermées dans MongoDB
                 process_and_store_issues(data)
-
+                print("++++++++++++++++++++++++++++++++++++++++++++")
                 print(f"✅ Traitement terminé pour {file_path}")
             except Exception as e:
                 print(f"❌ Erreur lors du traitement du fichier {file_path}: {e}")
