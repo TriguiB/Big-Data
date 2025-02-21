@@ -6,6 +6,11 @@ from pyspark.sql import SparkSession
 from pyspark.sql.functions import to_date, datediff, col
 from azure.storage.blob import BlobServiceClient
 from pymongo import MongoClient
+from transformers import T5Tokenizer, T5ForConditionalGeneration
+import torch
+# Initialisation du modèle T5
+tokenizer = T5Tokenizer.from_pretrained("t5-small")
+model = T5ForConditionalGeneration.from_pretrained("t5-small")
 
 # Configuration MongoDB
 MONGO_URI = 'mongodb://localhost:27017/'  # Remplace par ton URI MongoDB
@@ -99,7 +104,14 @@ def read_json_from_blob(blob_name):
     except Exception as e:
         print(f"❌ Erreur lors de la lecture du blob {blob_name}: {e}")
         raise
-
+def clean_text_t5(text):
+    """Nettoyer le texte en utilisant T5."""
+    if not text:
+        return ""
+    input_text = "summarize: " + text
+    inputs = tokenizer(input_text, return_tensors="pt", max_length=512, truncation=True)
+    summary_ids = model.generate(**inputs, max_length=150, min_length=30, length_penalty=2.0, num_beams=4, early_stopping=True)
+    return tokenizer.decode(summary_ids[0], skip_special_tokens=True)
 
 # Traiter et enregistrer les issues fermées dans MongoDB
 def process_and_store_issues(data):
@@ -109,17 +121,18 @@ def process_and_store_issues(data):
         if 'closed_issues' in message:
             closed_issues = message['closed_issues']
             for issue in closed_issues:
+                cleaned_body = clean_text_t5(issue.get('body', ''))
                 rows.append({
                     'issue_id': issue.get('id', None),
                     'title': issue.get('title', ''),
-                    'body': issue.get('body', ''),
+                    'body': cleaned_body,
                     'state': issue.get('state', ''),
                     'created_at': issue.get('created_at', None),
                     'closed_at': issue.get('closed_at', None),
                     'language': message.get('language', ''),
                     'stars': message.get('stars', 0)
                 })
-
+                
     # Créer un DataFrame à partir des lignes
     df_issues = spark.createDataFrame(rows)
 

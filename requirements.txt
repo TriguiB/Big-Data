@@ -9,3 +9,9 @@ markdown
 beautifulsoup4
 pymongo
 azure-storage-blob
+langdetect
+transformers
+torch
+matplotlib
+scikit-learn
+mlflow
