@@ -54,6 +54,7 @@ services:
   mlflow:
     build:
       context: .
+<<<<<<< HEAD
       dockerfile: Dockerfile.mlflow
     container_name: mlflow
     ports:
@@ -70,3 +71,18 @@ services:
 
 volumes:
   mongodb_data: 
+=======
+      dockerfile: Dockerfile.mlflow  # Reference to the MLflow-specific Dockerfile
+    container_name: mlflow
+    ports:
+      - "5000:5000"  # MLflow UI port
+    environment:
+      - MLFLOW_TRACKING_URI=http://mlflow:5000  # Set the tracking URI for MLflow
+    depends_on:
+      - mongodb
+    networks:
+      - default  # Ensure it's on the same network as the other containers
+
+volumes:
+  mongodb_data:
+>>>>>>> d8888ce5dec1f511a38e414013c0fe39499e495a
