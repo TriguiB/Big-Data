@@ -1,5 +1,5 @@
+version: "3.8"
 services:
-  # Définition de Spark Master et Worker
   spark-master:
     image: bitnami/spark:latest
     container_name: spark-master
@@ -47,22 +47,26 @@ services:
       - .:/app
     environment:
       - MONGO_URI=mongodb://mongodb:27017/github_issues
-      - MLFLOW_TRACKING_URI=http://mlflow:5000  # Assurez-vous d'utiliser l'URL correcte de MLflow
-    command: ["python", "your_script.py"]
+    command: sleep infinity
     working_dir: /app
     user: root
 
   mlflow:
-    image: python:3.8-slim  # Ou utilisez l'image Docker officielle de MLflow
+    build:
+      context: .
+      dockerfile: Dockerfile.mlflow
     container_name: mlflow
     ports:
-      - "5000:5000"  # Port pour l'interface web MLflow
-    volumes:
-      - mlruns:/mlflow/mlruns  # Répertoire pour stocker les expérimentations
+      - "5000:5000"
     environment:
-      - MLFLOW_TRACKING_URI=http://mlflow:5000  # URI pour les expérimentations
-    command: ["mlflow", "ui", "--host", "0.0.0.0"]
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+    depends_on:
+      - mongodb
+    volumes:
+      - ./mlruns:/mlruns  # Monte le répertoire des expériences
+      - ./models:/models  # Monte le répertoire des modèles
+    networks:
+      - default
 
 volumes:
-  mongodb_data:
-  mlruns:
+  mongodb_data: 

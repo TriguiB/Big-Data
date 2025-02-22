@@ -1,0 +1,15 @@
+artifact_uri: /app/notebooks/../mlruns/252413054002975375/e60b3381d7144f02911d6d290507f597/artifacts
+end_time: 1740239512282
+entry_point_name: ''
+experiment_id: '252413054002975375'
+lifecycle_stage: active
+run_id: e60b3381d7144f02911d6d290507f597
+run_name: upset-whale-74
+run_uuid: e60b3381d7144f02911d6d290507f597
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1740239415943
+status: 3
+tags: []
+user_id: root
