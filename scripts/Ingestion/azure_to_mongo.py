@@ -114,6 +114,20 @@ def clean_text_t5(text):
     return tokenizer.decode(summary_ids[0], skip_special_tokens=True)
 
 # Traiter et enregistrer les issues fermées dans MongoDB
+# Fonction pour attribuer la classe 'duration_class' 
+def assign_duration_class(duration):
+    if duration == 0:
+        return 1
+    elif duration in [1, 2]:
+        return 2
+    elif duration in [3, 4, 5]:
+        return 3
+    elif duration in [6, 7, 8]:
+        return 4
+    else:
+        return 5
+
+# Traiter et enregistrer les issues fermées dans MongoDB
 def process_and_store_issues(data):
     """Traiter et stocker les issues fermées dans MongoDB."""
     rows = []
@@ -122,25 +136,40 @@ def process_and_store_issues(data):
             closed_issues = message['closed_issues']
             for issue in closed_issues:
                 cleaned_body = clean_text_t5(issue.get('body', ''))
+                
+                # Calculer la durée
+                created_at = issue.get('created_at')
+                closed_at = issue.get('closed_at')
+                duration = None
+                duration_class = None
+
+                if created_at and closed_at:
+                    created_at_date = to_date(created_at)
+                    closed_at_date = to_date(closed_at)
+                    duration = datediff(closed_at_date, created_at_date)
+                    duration_class = assign_duration_class(duration)
+
                 rows.append({
                     'issue_id': issue.get('id', None),
                     'title': issue.get('title', ''),
                     'body': cleaned_body,
                     'state': issue.get('state', ''),
-                    'created_at': issue.get('created_at', None),
-                    'closed_at': issue.get('closed_at', None),
+                    'created_at': created_at,
+                    'closed_at': closed_at,
                     'language': message.get('language', ''),
-                    'stars': message.get('stars', 0)
+                    'stars': message.get('stars', 0),
+                    'duration': duration,
+                    'duration_class': duration_class  
                 })
                 
     # Créer un DataFrame à partir des lignes
     df_issues = spark.createDataFrame(rows)
 
-    # Effectuer des transformations supplémentaires si nécessaire (ex : calcul de durée)
+    
     df_issues = df_issues.withColumn("created_at", to_date(col("created_at"))) \
         .withColumn("closed_at", to_date(col("closed_at"))) \
         .withColumn("duration", datediff(col("closed_at"), col("created_at"))) \
-        .fillna("")
+        .fillna("")  # Gérer les valeurs manquantes
 
     # Afficher les données à insérer
     df_issues.show()
@@ -153,6 +182,7 @@ def process_and_store_issues(data):
         .save()
 
     print("✅ Données insérées avec succès dans MongoDB.")
+
 
 # Traiter les fichiers JSON et ajouter les nouveaux chemins
 def process_json_files(extracted_data_path):

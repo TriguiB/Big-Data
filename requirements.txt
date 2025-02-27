@@ -16,3 +16,4 @@ matplotlib
 scikit-learn
 mlflow
 tensorflow
+streamlit
