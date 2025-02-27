@@ -14,6 +14,5 @@ transformers
 torch
 matplotlib
 scikit-learn
-mlflow
 tensorflow
 streamlit
