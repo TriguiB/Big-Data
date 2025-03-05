@@ -1,32 +1,5 @@
-version: "3.8"
+
 services:
-  spark-master:
-    image: bitnami/spark:latest
-    container_name: spark-master
-    ports:
-      - "8080:8080"  # UI Spark
-      - "7077:7077"  # Port maître Spark
-    environment:
-      - SPARK_MODE=master
-
-  spark-worker-1:
-    image: bitnami/spark:latest
-    container_name: spark-worker-1
-    depends_on:
-      - spark-master
-    environment:
-      - SPARK_MODE=worker
-      - SPARK_MASTER_URL=spark://spark-master:7077
-
-  spark-worker-2:
-    image: bitnami/spark:latest
-    container_name: spark-worker-2
-    depends_on:
-      - spark-master
-    environment:
-      - SPARK_MODE=worker
-      - SPARK_MASTER_URL=spark://spark-master:7077
-
   mongodb:
     image: mongo:6.0
     container_name: mongodb
@@ -41,15 +14,19 @@ services:
       dockerfile: Dockerfile
     container_name: app
     depends_on:
-      - spark-master
       - mongodb
+      - mlflow
     volumes:
       - .:/app
+      - ./mlruns:/mlruns
+      - ./models:/models
     environment:
       - MONGO_URI=mongodb://mongodb:27017/github_issues
-    command: sleep infinity
     working_dir: /app
     user: root
+    ports:
+      - "8501:8501"
+    command: ["streamlit", "run", "notebooks/app.py", "--server.address", "0.0.0.0", "--server.port", "8501"] 
 
   mlflow:
     build:
@@ -63,10 +40,10 @@ services:
     depends_on:
       - mongodb
     volumes:
-      - ./mlruns:/mlruns  # Monte le répertoire des expériences
-      - ./models:/models  # Monte le répertoire des modèles
+      - ./mlruns:/mlruns
+      - ./models:/models
     networks:
       - default
 
 volumes:
-  mongodb_data: 
+  mongodb_data:
