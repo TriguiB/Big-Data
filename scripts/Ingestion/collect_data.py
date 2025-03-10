@@ -5,7 +5,7 @@ import sys
 from confluent_kafka import Producer
 
 # Configuration GitHub API
-GITHUB_TOKEN = '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'  # Remplace par ton token GitHub
+GITHUB_TOKEN = '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' 
 HEADERS = {'Authorization': f'token {GITHUB_TOKEN}'}
 BASE_URL = 'https://api.github.com/search/repositories'
 PER_PAGE = 100  # Max autorisé par GitHub
